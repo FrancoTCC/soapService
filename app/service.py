@@ -1,10 +1,9 @@
-from spyne import ServiceBase, rpc, Unicode, Integer, Float, Iterable, Dict
+from spyne import ServiceBase, rpc, Unicode, Integer, Float, Iterable
 from app.models import Usuario, Producto, Pedido, PedidoDetalle
 from app.database import Session
 
 class ServicioSOAP(ServiceBase):
 
-    # Método para crear un usuario
     @rpc(Unicode, Unicode, Unicode, _returns=Unicode)
     def crear_usuario(ctx, nombre, correo, tipo):
         session = Session()
@@ -15,7 +14,6 @@ class ServicioSOAP(ServiceBase):
         session.commit()
         return f"Usuario {nombre} creado"
 
-    # Método para crear un producto
     @rpc(Unicode, Unicode, Float, Integer, Unicode, _returns=Unicode)
     def crear_producto(ctx, nombre, descripcion, precio, stock, categoria):
         session = Session()
@@ -24,50 +22,61 @@ class ServicioSOAP(ServiceBase):
         session.commit()
         return f"Producto {nombre} creado"
 
-    # Método para listar productos
     @rpc(_returns=Iterable(Unicode))
     def listar_productos(ctx):
         session = Session()
         productos = session.query(Producto).all()
         return [f"{p.id} - {p.nombre} ({p.categoria}): {p.precio} USD. Stock: {p.stock}" for p in productos]
 
-    # Método para crear un pedido con múltiples productos
-    @rpc(Integer, Iterable(Dict(Integer, Integer)), _returns=Unicode)
-    def crear_pedido(ctx, usuario_id, productos):
+    @rpc(Integer, Iterable(Integer), Iterable(Integer), _returns=Unicode)
+    def crear_pedido(ctx, usuario_id, producto_ids, cantidades):
         session = Session()
+
+        # Verificar si el usuario es válido y es un cliente
         usuario = session.get(Usuario, usuario_id)
         if not usuario or usuario.tipo != 'cliente':
             return "Usuario inválido o no autorizado"
-        
-        total = 0
-        pedido = Pedido(usuario_id=usuario_id, confirmado=False)
-        
-        for producto_data in productos:
-            producto_id = producto_data['producto_id']
-            cantidad = producto_data['cantidad']
-            
+
+        # Verificar que las listas de producto_ids y cantidades tienen la misma longitud
+        if len(producto_ids) != len(cantidades):
+            return "La cantidad de productos no coincide con la cantidad de cantidades"
+
+        # Crear el pedido
+        pedido = Pedido(usuario_id=usuario_id, total=0)
+
+        total_pedido = 0
+        for producto_id, cantidad in zip(producto_ids, cantidades):
             producto = session.get(Producto, producto_id)
-            if not producto or producto.stock < cantidad:
-                return f"Producto {producto_id} no disponible o stock insuficiente"
-            
-            total += producto.precio * cantidad
-            
+
+            if not producto:
+                return f"Producto con ID {producto_id} no encontrado"
+            if producto.stock < cantidad:
+                return f"Stock insuficiente para el producto {producto.nombre}"
+
+            # Crear el detalle del pedido
             detalle = PedidoDetalle(
                 producto_id=producto.id,
                 cantidad=cantidad,
                 precio_unitario=producto.precio
             )
             pedido.detalles.append(detalle)
-            producto.stock -= cantidad
-        
 
-        pedido.total = total
+            # Actualizar el stock del producto
+            producto.stock -= cantidad
+
+            # Sumar al total del pedido
+            total_pedido += producto.precio * cantidad
+
+        # Establecer el total del pedido
+        pedido.total = total_pedido
+
+        # Agregar el pedido a la base de datos
         session.add(pedido)
         session.commit()
-        
-        return f"Pedido {pedido.id} creado con {len(productos)} productos"
 
-    # Método para cancelar un pedido
+        return f"Pedido {pedido.id} creado con {len(producto_ids)} productos"
+
+
     @rpc(Integer, _returns=Unicode)
     def cancelar_pedido(ctx, pedido_id):
         session = Session()
@@ -85,7 +94,6 @@ class ServicioSOAP(ServiceBase):
         session.commit()
         return "Pedido cancelado correctamente"
 
-    # Método para confirmar un pedido
     @rpc(Integer, _returns=Unicode)
     def confirmar_pedido(ctx, pedido_id):
         session = Session()
